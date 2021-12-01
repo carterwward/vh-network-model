@@ -44,7 +44,7 @@ def generate_size_dist(membership_edges:np.ndarray, size_dist:str="np.random.uni
             indeces = np.where(np.in1d(membership_edges, group_mems) == False)[0]
             if len(indeces) == 0:
                 continue
-            group_mems.append(membership_edges[indeces[-1]])
+            group_mems.append(int(membership_edges[indeces[-1]]))
             membership_edges = np.delete(membership_edges, indeces[-1])
         group_map[group_num] = group_mems
 
@@ -69,7 +69,7 @@ def fill_graph(size:int, group_map:dict, n_prop:float=0.33, h_prop:float=0.33) -
     for i in range(size):
         G.add_node(i)
 
-        # TODO: For now randomly initialize state, in future may want to assign starting state based on membership and group size
+        # TODO: For now randomly initialize state, in future may want to assign starting state based on membership and group size (prop of N and that cdf of group sizes)
         prob = np.random.uniform()
         if prob < n_prop:
             G.nodes[i]["status"] = "N"
@@ -118,3 +118,81 @@ def viz_graph(G: nx.Graph) -> None:
 
     # Show legend
     plt.show()
+
+
+def get_count_map_max(count_map:dict) -> str:
+    """Returns status with highest count
+
+    Args:
+        count_map (dict): map of status to counts
+
+    Returns:
+        str: status
+    """
+    counts = list(count_map.values())
+    max_count = max(counts)
+    return np.random.choice([k for k,v in count_map.items() if v == max_count])
+
+
+def process_majority(majority:str, current_status:str, G:nx.Graph, current_node:int, probability_map:dict, peer_pressure:bool=False, count_map:dict=None):
+    """Given the probability, assesses whether or not given transition will be made
+
+    Args:
+        majority (str): Most influential surrounding status
+        current_status (str): current node status
+        G (nx.Graph): The network
+        current_node (int): Identity of the current node
+        probability_map (dict): Map of transitions to probabilities and new states
+        peer_pressure (bool, optional): Whether or not peer pressure will be used for H to U influence. Defaults to False.
+        count_map (dict, optional): Map of status to counts. Defaults to None.
+    """
+    p, new_status = probability_map[majority+current_status]
+    # Check if we need to apply peer pressure dynamic
+    if peer_pressure and majority == "H" and current_status == "U":
+        # Scale influence by % of groups that were a part of majority
+        p += (count_map[majority]/sum(list(count_map.values())))*(1-p) / 2
+
+    if p > np.random.uniform():
+        G.nodes[current_node]["status"] = new_status
+
+
+# TODO: Change to params dictionary
+def update_clustered_network(G:nx.Graph, probability_map:dict, mem_map: dict, peer_pressure:bool=True) -> dict:
+    """Aggregates most influential status for each node and processes the majority.
+
+    Args:
+        G (nx.Graph): The network
+        probability_map (dict): Map of transitions to probabilities and new states
+        mem_map (dict): Map of groups to member lists
+        peer_pressure (bool, optional): Whether or not peer pressure will be used for H to U influence. Defaults to True.
+
+    Returns:
+        dict: status mapped to population count
+    """
+    nodes = list(G.nodes)
+    pop_counts = {"H": 0, "N": 0, "U":0}
+    # Iterate over nodes in the network
+
+    for node in nodes:
+        # get status
+        node_status = G.nodes[node]["status"]
+        # Get group list of the node
+        node_groups = G.nodes[node]["groups"]
+        group_count_map = {"H": 0, "N": 0, "U":0}
+
+        for group_num in node_groups:
+            # Counts of votes from groups
+            count_map = {"H": 0, "N": 0, "U":0}
+            for neighbor in mem_map[group_num]:
+                neighbor_status = G.nodes[neighbor]["status"]
+                count_map[neighbor_status] += 1
+
+            highest_status = get_count_map_max(count_map)
+            group_count_map[highest_status] += 1
+
+        majority = get_count_map_max(group_count_map)
+
+        if majority != "U" and majority != node_status:
+            process_majority(majority, node_status, G, node, probability_map, peer_pressure=peer_pressure, count_map=group_count_map)
+        pop_counts[G.nodes[node]["status"]] += 1
+    return pop_counts
